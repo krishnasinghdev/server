@@ -1,0 +1,41 @@
+{
+  "name": "server",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "check": "oxlint && oxfmt --write",
+    "db:generate": "drizzle-kit generate --config ./src/config/drizzle.ts",
+    "db:migrate": "drizzle-kit migrate --config ./src/config/drizzle.ts",
+    "db:studio": "drizzle-kit studio --config ./src/config/drizzle.ts",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "deploy": "wrangler deploy --minify",
+    "cf-gen-types": "wrangler types --env-interface CloudflareBindings",
+    "better-auth-gen-schema": "pnpm dlx @better-auth/cli@latest generate --config ./better-auth.config.ts --output ./src/db/schema.ts"
+  },
+  "dependencies": {
+    "@dodopayments/better-auth": "^1.4.2",
+    "@dodopayments/hono": "^0.2.5",
+    "@hono/zod-validator": "^0.7.6",
+    "@neondatabase/serverless": "^1.0.2",
+    "@trpc/server": "^11.8.1",
+    "better-auth": "^1.4.10",
+    "dodopayments": "^2.13.1",
+    "dotenv": "^17.2.3",
+    "drizzle-orm": "^0.45.1",
+    "drizzle-zod": "^0.8.3",
+    "hono": "^4.11.3",
+    "pg": "^8.16.3",
+    "postgres": "^3.4.7",
+    "resend": "^6.6.0",
+    "twilio": "^5.11.1",
+    "zod": "^4.3.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.3",
+    "@types/pg": "^8.16.0",
+    "drizzle-kit": "^0.31.8",
+    "oxfmt": "^0.22.0",
+    "oxlint": "^1.36.0",
+    "wrangler": "^4.54.0"
+  }
+}

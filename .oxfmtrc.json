@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "endOfLine": "lf",
+  "semi": false,
+  "singleQuote": false,
+  "tabWidth": 2,
+  "printWidth": 120,
+  "trailingComma": "es5",
+  "embeddedLanguageFormatting": "auto",
+  "experimentalSortPackageJson": true,
+  "experimentalSortImports": {
+    "ignoreCase": true,
+    "newlinesBetween": false
+  },
+  "importOrderParserPlugins": ["typescript", "decorators-legacy"],
+  "ignorePatterns": []
+}

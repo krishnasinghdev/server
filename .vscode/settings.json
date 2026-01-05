@@ -1,0 +1,72 @@
+{
+  // Package Manager
+  "npm.packageManager": "pnpm",
+  // Editor General Settings
+  "editor.defaultFormatter": "oxc.oxc-vscode",
+  "editor.tabSize": 2,
+  "editor.wordWrap": "on",
+  "editor.bracketPairColorization.enabled": true,
+  "editor.guides.bracketPairs": true,
+  "editor.minimap.enabled": false,
+  "editor.suggestSelection": "first",
+  "editor.linkedEditing": true,
+  "editor.stickyScroll.enabled": true,
+  "editor.inlineSuggest.enabled": true,
+  "editor.cursorSmoothCaretAnimation": "on",
+  "editor.fontLigatures": true,
+  // Quick Suggestions
+  "editor.quickSuggestions": {
+    "strings": true,
+    "comments": false,
+    "other": true
+  },
+  // Custom Import Suggestions for Next.js
+  "javascript.suggest.autoImports": true,
+  "javascript.preferences.importModuleSpecifier": "non-relative",
+  "javascript.suggest.paths": true,
+  // Formatting Settings
+  "editor.formatOnSave": true,
+  "prettier.requireConfig": true,
+  "prettier.useEditorConfig": false,
+  "prettier.enable": true,
+  "prettier.configPath": "prettier.config.mjs",
+  "javascript.updateImportsOnFileMove.enabled": "always",
+  // File Management
+  "files.autoSave": "onWindowChange",
+  "files.trimTrailingWhitespace": true,
+  "files.insertFinalNewline": true,
+  "files.eol": "\n",
+  "files.exclude": {
+    "**/.git": true,
+    "**/.husky": true,
+    "**/.wrangler": true,
+    "**/dist": true,
+    "**/node_modules": true,
+    "**/.pnpm-store": true
+  },
+  // Workbench Settings
+  "workbench.editor.enablePreview": false,
+  "workbench.editor.closeEmptyGroups": true,
+  "gitlens.currentLine.enabled": false,
+  // Language-specific Settings
+  "[javascript]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.suggestSelection": "recentlyUsed",
+    "editor.suggest.showTypeParameters": true
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.formatOnSave": true
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "oxc.oxc-vscode",
+    "editor.formatOnSave": true
+  },
+  // Git Settings
+  "git.autofetch": true,
+  "git.confirmSync": false,
+  "git.enableSmartCommit": true,
+  // Explorer Settings
+  "explorer.compactFolders": false,
+  "explorer.confirmDelete": false
+}
