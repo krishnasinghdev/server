@@ -6,6 +6,7 @@ import { billingTenantSubscriptions } from "./billing.schema"
 import { billingOneTimePayments } from "./billing.schema"
 import { billingInvoices } from "./billing.schema"
 import { billingPaymentEvents } from "./billing.schema"
+import { iamPermissions, iamRolePermissions, iamRoles } from "./iam-role.schema"
 import {
   platformAuditLogs,
   platformImpersonationSessions,
@@ -13,9 +14,8 @@ import {
   securityEvents,
 } from "./platform.schema"
 import { projects } from "./project.schema"
-import { iamPermissions, iamRolePermissions, iamRoles } from "./role.schema"
 import { tenants, tenantCreditLedgers, tenantMembers } from "./tenant.schema"
-import { usageAggregates, usageMeteredUsage, usageOverageFees } from "./usage.schema"
+import { usageAggregates, usageEvents, usageOverageFees } from "./usage.schema"
 import { users, userSessions, userAccounts, userPrivacyConsents, userPrivacySubjectRequests } from "./user.schema"
 
 // USER RELATIONS START
@@ -45,19 +45,6 @@ export const accountRelations = relations(userAccounts, ({ one }) => ({
   user: one(users, {
     fields: [userAccounts.user_id],
     references: [users.id],
-  }),
-}))
-
-export const userystemRolesRelations = relations(platformRoleAssignments, ({ one }) => ({
-  user: one(users, {
-    fields: [platformRoleAssignments.assigned_user_id],
-    references: [users.id],
-    relationName: "assigned_user",
-  }),
-  role: one(iamRoles, {
-    fields: [platformRoleAssignments.role_id],
-    references: [iamRoles.id],
-    relationName: "role",
   }),
 }))
 
@@ -144,9 +131,9 @@ export const usageOverageFeesRelations = relations(usageOverageFees, ({ one }) =
   }),
 }))
 
-export const usageMeteredUsageRelations = relations(usageMeteredUsage, ({ one }) => ({
+export const usageEventsRelations = relations(usageEvents, ({ one }) => ({
   tenant: one(tenants, {
-    fields: [usageMeteredUsage.tenant_id],
+    fields: [usageEvents.tenant_id],
     references: [tenants.id],
   }),
 }))
@@ -164,7 +151,7 @@ export const tenantWorkspacesRelations = relations(tenants, ({ many }) => ({
   paymentEvents: many(billingPaymentEvents),
   usageAggregates: many(usageAggregates),
   usageOverageFees: many(usageOverageFees),
-  usageMeteredUsage: many(usageMeteredUsage),
+  usageEvents: many(usageEvents),
 }))
 
 export const tenantMembersRelations = relations(tenantMembers, ({ one }) => ({
@@ -197,12 +184,6 @@ export const projectsRelations = relations(projects, ({ one }) => ({
 }))
 
 // TENANT RELATIONS END
-
-// ROLE RELATIONS START
-export const iamRolesRelations = relations(iamRoles, ({ many }) => ({
-  permissions: many(iamRolePermissions),
-}))
-// ROLE RELATIONS END
 
 // PLATFORM RELATIONS START
 export const platformAuditLogsRelations = relations(platformAuditLogs, ({ one }) => ({
@@ -252,10 +233,9 @@ export const platformImpersonationSessionsRelations = relations(platformImperson
 // PLATFORM RELATIONS END //
 
 // ROLE RELATIONS START
-export const iamPlatformRolesRelations = relations(iamRoles, ({ many }) => ({
+export const iamRolesRelations = relations(iamRoles, ({ many }) => ({
   members: many(tenantMembers),
-  permissions: many(iamPermissions),
-  systemUsers: many(users),
+  permissions: many(iamRolePermissions),
   platformRoleAssignments: many(platformRoleAssignments),
 }))
 

@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm"
 import { boolean, check, date, index, integer, jsonb, pgTable, text, unique } from "drizzle-orm/pg-core"
 import { createInsertSchema, createSelectSchema, createUpdateSchema } from "drizzle-zod"
+import { z } from "zod"
 import { createdAt, id, idRef, uuidColumn } from "./_base.schema"
 import {
   planKeyEnum,
@@ -33,6 +34,10 @@ export const billingPlansISchema = createInsertSchema(billingPlans)
 export const billingPlansSSchema = createSelectSchema(billingPlans)
 export const billingPlansUSchema = createUpdateSchema(billingPlans)
 
+export type BillingPlan = z.infer<typeof billingPlansSSchema>
+export type NewBillingPlan = z.infer<typeof billingPlansISchema>
+export type BillingPlanUpdate = z.infer<typeof billingPlansUSchema>
+
 // Billing Plan Features
 export const billingPlanFeatures = pgTable(
   "billing_plan_features",
@@ -59,6 +64,33 @@ export const billingPlanFeaturesISchema = createInsertSchema(billingPlanFeatures
 export const billingPlanFeaturesSSchema = createSelectSchema(billingPlanFeatures)
 export const billingPlanFeaturesUSchema = createUpdateSchema(billingPlanFeatures)
 
+export type BillingPlanFeature = z.infer<typeof billingPlanFeaturesSSchema>
+export type NewBillingPlanFeature = z.infer<typeof billingPlanFeaturesISchema>
+export type BillingPlanFeatureUpdate = z.infer<typeof billingPlanFeaturesUSchema>
+
+export const billingPlanPrices = pgTable(
+  "billing_plan_prices",
+  {
+    id: id(),
+    plan_id: idRef("plan_id").references(() => billingPlans.id),
+    provider: paymentProviderEnum("provider").notNull(),
+    provider_product_id: text("provider_product_id").notNull(),
+    provider_price_id: text("provider_price_id"),
+    currency: currencyEnum("currency").notNull(),
+    billing_interval: billingIntervalEnum("billing_interval").notNull(),
+    is_active: boolean("is_active").notNull().default(true),
+    created_at: createdAt(),
+  },
+  (table) => [unique().on(table.plan_id, table.provider, table.provider_price_id)]
+)
+export const billingPlanPricesISchema = createInsertSchema(billingPlanPrices)
+export const billingPlanPricesSSchema = createSelectSchema(billingPlanPrices)
+export const billingPlanPricesUSchema = createUpdateSchema(billingPlanPrices)
+
+export type BillingPlanPrice = z.infer<typeof billingPlanPricesSSchema>
+export type NewBillingPlanPrice = z.infer<typeof billingPlanPricesISchema>
+export type BillingPlanPriceUpdate = z.infer<typeof billingPlanPricesUSchema>
+
 // Payment Customers
 export const billingCustomers = pgTable(
   "billing_customers",
@@ -78,6 +110,10 @@ export const billingCustomers = pgTable(
 export const billingCustomersISchema = createInsertSchema(billingCustomers)
 export const billingCustomersSSchema = createSelectSchema(billingCustomers)
 export const billingCustomersUSchema = createUpdateSchema(billingCustomers)
+
+export type BillingCustomer = z.infer<typeof billingCustomersSSchema>
+export type NewBillingCustomer = z.infer<typeof billingCustomersISchema>
+export type BillingCustomerUpdate = z.infer<typeof billingCustomersUSchema>
 
 // One Time Payments
 export const billingOneTimePayments = pgTable(
@@ -106,6 +142,10 @@ export const billingOneTimePayments = pgTable(
 export const billingOneTimePaymentsISchema = createInsertSchema(billingOneTimePayments)
 export const billingOneTimePaymentsSSchema = createSelectSchema(billingOneTimePayments)
 export const billingOneTimePaymentsUSchema = createUpdateSchema(billingOneTimePayments)
+
+export type BillingOneTimePayment = z.infer<typeof billingOneTimePaymentsSSchema>
+export type NewBillingOneTimePayment = z.infer<typeof billingOneTimePaymentsISchema>
+export type BillingOneTimePaymentUpdate = z.infer<typeof billingOneTimePaymentsUSchema>
 
 // Tenant Subscriptions
 export const billingTenantSubscriptions = pgTable(
@@ -141,6 +181,10 @@ export const billingTenantSubscriptions = pgTable(
 export const billingTenantSubscriptionsISchema = createInsertSchema(billingTenantSubscriptions)
 export const billingTenantSubscriptionsSSchema = createSelectSchema(billingTenantSubscriptions)
 export const billingTenantSubscriptionsUSchema = createUpdateSchema(billingTenantSubscriptions)
+
+export type BillingTenantSubscription = z.infer<typeof billingTenantSubscriptionsSSchema>
+export type NewBillingTenantSubscription = z.infer<typeof billingTenantSubscriptionsISchema>
+export type BillingTenantSubscriptionUpdate = z.infer<typeof billingTenantSubscriptionsUSchema>
 
 // Billing Invoices
 export const billingInvoices = pgTable(
@@ -180,6 +224,10 @@ export const billingInvoicesISchema = createInsertSchema(billingInvoices)
 export const billingInvoicesSSchema = createSelectSchema(billingInvoices)
 export const billingInvoicesUSchema = createUpdateSchema(billingInvoices)
 
+export type BillingInvoice = z.infer<typeof billingInvoicesSSchema>
+export type NewBillingInvoice = z.infer<typeof billingInvoicesISchema>
+export type BillingInvoiceUpdate = z.infer<typeof billingInvoicesUSchema>
+
 // Billing Payment Events
 export const billingPaymentEvents = pgTable(
   "billing_payment_events",
@@ -207,3 +255,7 @@ export const billingPaymentEvents = pgTable(
 export const billingPaymentEventsISchema = createInsertSchema(billingPaymentEvents)
 export const billingPaymentEventsSSchema = createSelectSchema(billingPaymentEvents)
 export const billingPaymentEventsUSchema = createUpdateSchema(billingPaymentEvents)
+
+export type BillingPaymentEvent = z.infer<typeof billingPaymentEventsSSchema>
+export type NewBillingPaymentEvent = z.infer<typeof billingPaymentEventsISchema>
+export type BillingPaymentEventUpdate = z.infer<typeof billingPaymentEventsUSchema>

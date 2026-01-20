@@ -22,10 +22,10 @@ export const projects = pgTable(
   },
   (table) => [index("idx_projects_tenant").on(table.tenant_id), index("idx_projects_created_at").on(table.created_at)]
 )
-export const projectsISchema = createInsertSchema(projects)
-export const projectsSSchema = createSelectSchema(projects)
-export const projectsUSchema = createUpdateSchema(projects)
+export const projectsSSchema = createSelectSchema(projects).strict()
+export const projectsISchema = createInsertSchema(projects).strict()
+export const projectsUSchema = createUpdateSchema(projects).strict()
 
-export type ProjectsSelect = z.infer<typeof projectsSSchema>
-export type ProjectsInsert = z.infer<typeof projectsISchema>
-export type ProjectsUpdate = z.infer<typeof projectsUSchema>
+export type Project = z.infer<typeof projectsSSchema>
+export type NewProject = z.infer<typeof projectsISchema>
+export type ProjectUpdate = z.infer<typeof projectsUSchema>

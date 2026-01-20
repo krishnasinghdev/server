@@ -254,4 +254,359 @@
     - Reduce trial abuse
     - Optional feature for strict signup control
 
-16. Implement WAF for further security
+16. Cloudflare WAF for further security
+17. Cloudflare Queue for background jobs
+18. Cloudflare KV for caching
+19. partner program with dub.sh
+
+---
+
+Proceeding.
+Below is a **production-grade, structured, and concise user-journey flow**, mapped explicitly to your **existing route boundaries**.
+I will keep this **operational**, not conceptual.
+
+---
+
+# 1. Regular User Signup (No Invitation)
+
+### Goal
+
+Create a new tenant, start on **starter (free) plan**, enable immediate usage.
+
+### Flow
+
+1. **Signup**
+   - `POST /me/signup`
+   - Create `users`, `user_accounts`, `user_sessions`
+   - Record `user_privacy_consents`
+
+2. **Invitation Check**
+   - Query `tenant_invitations` by email
+   - ❌ None found → proceed to tenant creation
+
+3. **Tenant Creation**
+   - `POST /tenants`
+   - Create:
+     - `tenants` (plan = starter, billing_state = trial)
+     - `tenant_members` (owner role)
+
+   - Seed default IAM roles if needed
+
+4. **Billing Initialization**
+   - No provider customer created yet
+   - Usage allowed under starter limits
+
+5. **Post-Onboarding**
+   - Redirect to `/projects`
+   - User can create projects immediately
+
+**Primary Routes Used**
+
+- `/me`
+- `/tenants`
+- `/projects`
+- `/usage`
+
+---
+
+# 2. Regular User Signup (With Invitation)
+
+### Goal
+
+Attach user to existing tenant without creating a new one.
+
+### Flow
+
+1. **Signup**
+   - `POST /me/signup`
+
+2. **Invitation Resolution**
+   - `tenant_invitations.email = user.email`
+   - Status = `pending`
+
+3. **Tenant Attachment**
+   - Create `tenant_members`
+   - Assign role based on invitation
+   - Update invitation → `accepted`
+
+4. **Billing & Usage**
+   - Tenant billing state applies immediately
+   - Guest/member limits enforced
+
+**Important Constraint**
+
+- **No new tenant created**
+
+**Primary Routes Used**
+
+- `/me`
+- `/tenants`
+
+---
+
+# 3. Guest User Flow (Invited as Guest)
+
+### Goal
+
+Allow controlled access while enforcing usage & limits.
+
+### Flow
+
+1. **Invitation**
+   - `POST /tenants/:id/invitations`
+   - member_type = `guest`
+
+2. **Signup / Accept**
+   - Guest signs up or logs in
+   - Create `tenant_members` with `member_type = guest`
+
+3. **Access Control**
+   - IAM role restricts permissions
+   - Guest **still emits usage events**
+
+4. **Usage Enforcement**
+   - Guest actions → `usage_events`
+   - Counts against:
+     - Guest limits
+     - Usage limits
+     - Credits (if applicable)
+
+**Primary Routes Used**
+
+- `/tenants`
+- `/projects`
+- `/usage`
+- `/iam-roles`
+
+---
+
+# 4. Admin (Platform) User Signup
+
+### Goal
+
+Create **internal-only** admin with zero tenant access by default.
+
+### Flow
+
+1. **Provisioning (Internal Only)**
+   - `POST /internal/admins`
+   - Create `users`
+   - Assign platform role via `platform_role_assignments`
+
+2. **Security Hardening**
+   - Enforce:
+     - MFA
+     - Domain allowlist
+     - No tenant membership
+
+3. **Admin Access**
+   - Access only via:
+     - `/platform`
+     - `/security`
+     - `/billing` (read/admin)
+
+**Explicitly Blocked**
+
+- `/projects`
+- `/tenants` (except via impersonation)
+
+**Primary Routes Used**
+
+- `/internal`
+- `/platform`
+- `/security`
+
+---
+
+# 5. Project Creation & Usage Flow (Any Member)
+
+### Goal
+
+Create projects and track usage deterministically.
+
+### Flow
+
+1. **Create Project**
+   - `POST /projects`
+   - Validate:
+     - Tenant active
+     - Seat/guest limits
+     - Project count limitsate
+
+2. **Usage Emission**
+   - Emit `usage_events`
+   - Enforce idempotency
+
+3. **Aggregation**
+   - Periodic job → `usage_aggregates`
+
+4. **Overage Calculation**
+   - If exceeded:
+     - Create `usage_overage_fees`
+     - Invoice at period end
+
+**Primary Routes Used**
+
+- `/projects`
+- `/usage`
+
+---
+
+# 6. Subscription Upgrade / Billing Flow
+
+### Goal
+
+Convert free → paid or manage ongoing billing.
+
+### Flow
+
+1. **Plan Selection**
+   - `POST /billing/checkout`
+
+2. **Customer Creation**
+   - Create `billing_customers` (once per provider)
+
+3. **Subscription Creation**
+   - Create `billing_tenant_subscriptions`
+   - Status = `trialing | active`
+
+4. **Webhook Processing**
+   - `billing_payment_events`
+   - Update:
+     - Subscription
+     - Invoices
+     - Billing state
+
+5. **Post-Payment**
+   - Update tenant:
+     - `billing_state = active`
+     - Feature limits increased
+
+**Primary Routes Used**
+
+- `/billing`
+- `/usage`
+
+---
+
+# 7. Credit Top-Up (One-Time Payment)
+
+### Goal
+
+Increase usable credits independently of subscription.
+
+### Flow
+
+1. **Checkout**
+   - `POST /billing/topup`
+
+2. **Payment Success**
+   - `billing_one_time_payments`
+   - Webhook confirmed
+
+3. **Ledger Update**
+   - Append `tenant_credit_ledgers`
+   - Set `expires_at` per policy
+
+4. **Consumption**
+   - FIFO consumption during usage
+
+**Primary Routes Used**
+
+- `/billing`
+- `/usage`
+
+---
+
+# 8. Platform Admin Impersonation
+
+### Goal
+
+Support customers safely without data leakage.
+
+### Flow
+
+1. **Start Session**
+   - `POST /platform/impersonate`
+   - Create `platform_impersonation_sessions`
+
+2. **Scoped Access**
+   - Admin gains temporary tenant context
+   - All actions audited
+
+3. **End Session**
+   - Session closed
+   - Access revoked immediately
+
+**Primary Routes Used**
+
+- `/platform`
+- `/security`
+
+---
+
+# 9. Privacy & Compliance Flow
+
+### Goal
+
+Meet GDPR / compliance obligations.
+
+### Flow
+
+1. **Consent Management**
+   - `POST /privacy/consents`
+
+2. **Data Request**
+   - `POST /privacy/requests`
+   - access | deletion
+
+3. **Processing**
+   - Admin processes request
+   - Apply deletion strategy:
+     - anonymize
+     - delete
+     - archive
+
+4. **Audit**
+   - Log every step
+
+**Primary Routes Used**
+
+- `/privacy`
+- `/internal`
+- `/platform`
+
+---
+
+# 10. Route Structure Validation (Your Setup)
+
+Your route boundaries are **clean, scalable, and production-grade**:
+
+| Route        | Responsibility      |
+| ------------ | ------------------- |
+| `/me`        | Identity & session  |
+| `/tenants`   | Org lifecycle       |
+| `/projects`  | Core domain         |
+| `/usage`     | Metering            |
+| `/billing`   | Monetization        |
+| `/iam-roles` | RBAC                |
+| `/platform`  | Admin control       |
+| `/security`  | Threats & incidents |
+| `/privacy`   | Compliance          |
+| `/internal`  | System-only APIs    |
+| `/admin`     | UI/Admin façade     |
+
+This structure will **scale without refactors**.
+
+---
+
+## Next (Optional)
+
+If you want, next we can:
+
+- Draw **state transition diagrams**
+- Define **hard invariants** (what must never happen)
+- Produce a **launch-readiness checklist**
+- Simulate **failure scenarios** (webhook loss, partial billing, abuse)
+
+Just say which one.

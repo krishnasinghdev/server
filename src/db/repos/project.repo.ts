@@ -1,12 +1,12 @@
 import { eq, and, desc } from "drizzle-orm"
 import type { PostgresDbType } from "../../config/db.config"
-import { projects, ProjectsInsert, ProjectsUpdate } from "../schemas/project.schema"
+import { projects, type NewProject, type ProjectUpdate } from "../schemas/project.schema"
 
-export async function findAllByTenant(db: PostgresDbType, tenantId: number) {
+export async function findAllProjectsByTenantId(db: PostgresDbType, tenantId: number) {
   return await db.select().from(projects).where(eq(projects.tenant_id, tenantId)).orderBy(desc(projects.created_at))
 }
 
-export async function findByUuid(db: PostgresDbType, uuid: string, tenantId: number) {
+export async function findProjectByUuid(db: PostgresDbType, uuid: string, tenantId: number) {
   return await db
     .select()
     .from(projects)
@@ -14,7 +14,7 @@ export async function findByUuid(db: PostgresDbType, uuid: string, tenantId: num
     .limit(1)
 }
 
-export async function findById(db: PostgresDbType, id: number, tenantId: number) {
+export async function findProjectById(db: PostgresDbType, id: number, tenantId: number) {
   return await db
     .select()
     .from(projects)
@@ -22,21 +22,26 @@ export async function findById(db: PostgresDbType, id: number, tenantId: number)
     .limit(1)
 }
 
-export async function create(db: PostgresDbType, data: ProjectsInsert) {
+export async function createProject(db: PostgresDbType, data: NewProject) {
   return await db.insert(projects).values(data).returning()
 }
 
-export async function updateByUuid(db: PostgresDbType, uuid: string, tenantId: number, data: ProjectsUpdate) {
+export async function updateProjectByUuid(
+  db: PostgresDbType,
+  projectUuid: string,
+  tenantId: number,
+  data: ProjectUpdate
+) {
   return await db
     .update(projects)
     .set(data)
-    .where(and(eq(projects.uuid, uuid), eq(projects.tenant_id, tenantId)))
+    .where(and(eq(projects.uuid, projectUuid), eq(projects.tenant_id, tenantId)))
     .returning()
 }
 
-export async function deleteByUuid(db: PostgresDbType, uuid: string, tenantId: number) {
+export async function deleteProjectByUuid(db: PostgresDbType, projectUuid: string, tenantId: number) {
   return await db
     .delete(projects)
-    .where(and(eq(projects.uuid, uuid), eq(projects.tenant_id, tenantId)))
+    .where(and(eq(projects.uuid, projectUuid), eq(projects.tenant_id, tenantId)))
     .returning()
 }

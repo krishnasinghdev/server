@@ -1,10 +1,10 @@
 import { sql } from "drizzle-orm"
 import { check, date, index, integer, pgTable, text, unique } from "drizzle-orm/pg-core"
 import { createInsertSchema, createSelectSchema, createUpdateSchema } from "drizzle-zod"
+import { z } from "zod"
 import { createdAt, id, idRef } from "./_base.schema"
 import { tenants } from "./tenant.schema"
-
-// Usage Summaries
+// Usage Aggregates
 export const usageAggregates = pgTable(
   "usage_aggregates",
   {
@@ -28,6 +28,10 @@ export const usageAggregates = pgTable(
 export const usageAggregatesISchema = createInsertSchema(usageAggregates)
 export const usageAggregatesSSchema = createSelectSchema(usageAggregates)
 export const usageAggregatesUSchema = createUpdateSchema(usageAggregates)
+
+export type UsageAggregate = z.infer<typeof usageAggregatesSSchema>
+export type NewUsageAggregate = z.infer<typeof usageAggregatesISchema>
+export type UsageAggregateUpdate = z.infer<typeof usageAggregatesUSchema>
 
 // Usage Overage Fees
 // Note: totals are computed; consider a view for invoice integration
@@ -62,9 +66,13 @@ export const usageOverageFeesISchema = createInsertSchema(usageOverageFees)
 export const usageOverageFeesSSchema = createSelectSchema(usageOverageFees)
 export const usageOverageFeesUSchema = createUpdateSchema(usageOverageFees)
 
-// Usage Metered Usage
-export const usageMeteredUsage = pgTable(
-  "usage_metered_usage",
+export type UsageOverageFee = z.infer<typeof usageOverageFeesSSchema>
+export type NewUsageOverageFee = z.infer<typeof usageOverageFeesISchema>
+export type UsageOverageFeeUpdate = z.infer<typeof usageOverageFeesUSchema>
+
+// Usage Events
+export const usageEvents = pgTable(
+  "usage_events",
   {
     id: id(),
     tenant_id: idRef("tenant_id")
@@ -73,16 +81,22 @@ export const usageMeteredUsage = pgTable(
         onDelete: "cascade",
       }),
     feature_key: text("feature_key").notNull(),
-    count: integer("count").notNull(),
-    period: date("period").notNull(), // YYYY-MM-01
+    units: integer("units").notNull(),
+    idempotency_key: text("idempotency_key").notNull(),
+    created_at: createdAt(),
   },
   (table) => [
-    unique().on(table.tenant_id, table.feature_key, table.period),
-    index("idx_usage_metered_usage_tenant").on(table.tenant_id),
-    index("idx_usage_metered_usage_period").on(table.period),
-    check("chk_count_nonnegative", sql`count >= 0`),
+    unique().on(table.tenant_id, table.feature_key, table.idempotency_key),
+    index("idx_usage_events_tenant").on(table.tenant_id),
+    index("idx_usage_events_created_at").on(table.created_at),
+    index("idx_usage_events_feature_key").on(table.feature_key),
+    index("idx_usage_events_idempotency_key").on(table.tenant_id, table.idempotency_key),
   ]
 )
-export const usageMeteredUsageISchema = createInsertSchema(usageMeteredUsage)
-export const usageMeteredUsageSSchema = createSelectSchema(usageMeteredUsage)
-export const usageMeteredUsageUSchema = createUpdateSchema(usageMeteredUsage)
+export const usageEventsISchema = createInsertSchema(usageEvents)
+export const usageEventsSSchema = createSelectSchema(usageEvents)
+export const usageEventsUSchema = createUpdateSchema(usageEvents)
+
+export type UsageEvent = z.infer<typeof usageEventsSSchema>
+export type NewUsageEvent = z.infer<typeof usageEventsISchema>
+export type UsageEventUpdate = z.infer<typeof usageEventsUSchema>

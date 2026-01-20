@@ -26,10 +26,6 @@
   "javascript.suggest.paths": true,
   // Formatting Settings
   "editor.formatOnSave": true,
-  "prettier.requireConfig": true,
-  "prettier.useEditorConfig": false,
-  "prettier.enable": true,
-  "prettier.configPath": "prettier.config.mjs",
   "javascript.updateImportsOnFileMove.enabled": "always",
   // File Management
   "files.autoSave": "onWindowChange",

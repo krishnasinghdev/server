@@ -1,30 +1,22 @@
-import { dodopayments, checkout, portal, webhooks, usage } from "@dodopayments/better-auth"
-import { neon } from "@neondatabase/serverless"
 import { betterAuth } from "better-auth"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
-import DodoPayments from "dodopayments"
-import { drizzle } from "drizzle-orm/neon-http"
-import type { EnvType } from "../types"
+import type { AppContext } from "../types"
 import * as schema from "../db/schemas/_index.schema"
+import notificationService from "../services/notification.service"
 
-export const dodoPayments = (env: EnvType): DodoPayments => {
-  return new DodoPayments({
-    bearerToken: env.DODO_PAYMENTS_API_KEY,
-    environment: env.DODO_PAYMENTS_ENVIRONMENT,
-  })
-}
-
-export const auth = (env: EnvType): ReturnType<typeof betterAuth> => {
-  const sql = neon(env.DB_POSTGRES_URL)
-  const db = drizzle(sql)
+export const auth = (c: AppContext): ReturnType<typeof betterAuth> => {
+  const db = c.get("db")
 
   return betterAuth({
-    appName: "ts-saas-demo",
-    basePath: "/api/auth",
-    database: drizzleAdapter(db, { provider: "pg", schema }),
-    baseURL: env.BETTER_AUTH_URL,
-    secret: env.BETTER_AUTH_SECRET,
-    trustedOrigins: [env.CORS_ORIGIN ?? "*"],
+    basePath: "/api/v1/auth",
+    appName: c.env.APP_NAME,
+    baseURL: c.env.BETTER_AUTH_URL,
+    secret: c.env.BETTER_AUTH_SECRET,
+    trustedOrigins: [c.env.CORS_ORIGIN],
+    database: drizzleAdapter(db, {
+      provider: "pg",
+      schema,
+    }),
     emailAndPassword: {
       enabled: true,
       disableSignUp: false,
@@ -33,25 +25,39 @@ export const auth = (env: EnvType): ReturnType<typeof betterAuth> => {
       maxPasswordLength: 28,
       autoSignIn: true,
       sendResetPassword: async ({ user, url, token }) => {
-        console.log("sendResetPassword", user, url, token)
-        // Send reset password email
+        console.log("sendResetPassword", {
+          email: user.email,
+          url,
+          token,
+        })
+        notificationService.sendEmail(c, {
+          to: user.email,
+          subject: "Reset your password",
+          html: `<p>Click the link to reset your password: <a href="${url}">${url}</a></p>`,
+        })
       },
-      resetPasswordTokenExpiresIn: 3600, // 1 hour
-      // password: {
-      //   hash: async (password) => {
-      //     // Custom password hashing
-      //     return hashedPassword
-      //   },
-      //   verify: async ({ hash, password }) => {
-      //     // Custom password verification
-      //     return isValid
-      //   },
-      // },
+      resetPasswordTokenExpiresIn: 60 * 60,
+    },
+    emailVerification: {
+      sendVerificationEmail: async ({ user, url }) => {
+        console.log("sendVerificationEmail", {
+          email: user.email,
+          url,
+        })
+        const result = await notificationService.sendEmail(c, {
+          to: user.email,
+          subject: "Verify your email address",
+          html: `<p>Click the link to verify your email: <a href="${url}">${url}</a></p>`,
+        })
+        console.log("result", result)
+      },
+      sendOnSignIn: true,
     },
     user: {
       modelName: "users",
       fields: {
-        id: "uuid",
+        id: "id",
+        uuid: "uuid",
         name: "name",
         email: "email",
         emailVerified: "email_verified",
@@ -63,7 +69,7 @@ export const auth = (env: EnvType): ReturnType<typeof betterAuth> => {
     session: {
       modelName: "userSessions",
       fields: {
-        id: "uuid",
+        id: "id",
         token: "token",
         expiresAt: "expires_at",
         ipAddress: "ip_address",
@@ -72,11 +78,14 @@ export const auth = (env: EnvType): ReturnType<typeof betterAuth> => {
         createdAt: "created_at",
         updatedAt: "updated_at",
       },
+      cookieCache: {
+        enabled: true,
+      },
     },
     account: {
       modelName: "userAccounts",
       fields: {
-        id: "uuid",
+        id: "id",
         accountId: "account_id",
         providerId: "provider_id",
         userId: "user_id",
@@ -94,7 +103,7 @@ export const auth = (env: EnvType): ReturnType<typeof betterAuth> => {
     verification: {
       modelName: "userVerifications",
       fields: {
-        id: "uuid",
+        id: "id",
         identifier: "identifier",
         value: "value",
         expiresAt: "expires_at",
@@ -107,31 +116,5 @@ export const auth = (env: EnvType): ReturnType<typeof betterAuth> => {
         generateId: false,
       },
     },
-    plugins: [
-      dodopayments({
-        client: dodoPayments(env),
-        createCustomerOnSignUp: true,
-        use: [
-          checkout({
-            products: [
-              {
-                productId: "pdt_xxxxxxxxxxxxxxxxxxxxx",
-                slug: "premium-plan",
-              },
-            ],
-            successUrl: "/dashboard/success",
-            authenticatedUsersOnly: true,
-          }),
-          portal(),
-          webhooks({
-            webhookKey: process.env.DODO_PAYMENTS_WEBHOOK_SECRET!,
-            onPayload: async (payload) => {
-              console.log("Received webhook:", payload.type)
-            },
-          }),
-          usage(),
-        ],
-      }),
-    ],
   })
 }

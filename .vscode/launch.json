@@ -2,16 +2,15 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Node Express",
+      "name": "Wrangler Dev (Hono)",
       "type": "node",
       "request": "launch",
-      "runtimeExecutable": "node",
-      "program": "${workspaceFolder}/node_modules/tsx/dist/cli.mjs",
-      "args": ["watch", "--env-file=.env.local", "src/server.ts"],
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["wrangler", "dev"],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
+      "autoAttachChildProcesses": true,
       "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
-      "restart": true,
       "env": {
         "NODE_ENV": "development"
       }

@@ -76,9 +76,6 @@ export interface NotificationProviderConfig {
   push?: ChannelProviderConfig<PushProviderName>
 }
 
-export type ProviderFactory = new () => NotificationProvider<any>
-export type ProviderFactoriesMap = Record<Channel, Record<string, ProviderFactory>>
-
 export type ChannelPayloadMap = {
   email: EmailPayload
   sms: SMSPayload
@@ -86,15 +83,22 @@ export type ChannelPayloadMap = {
   push: PushPayload
 }
 
-export type GetProvider = (
-  channel: Channel,
-  c: Context,
-  override?: NotificationProviderConfig[Channel]
-) => NotificationProvider<any> | null
+export type TypedProvider<C extends Channel> = NotificationProvider<ChannelPayloadMap[C]>
 
-export type SendNotification = (
+export type ProviderFactory<C extends Channel> = new () => TypedProvider<C>
+export type ProviderFactoriesMap = {
+  [C in Channel]: Record<string, ProviderFactory<C>>
+}
+
+export type GetProvider = <C extends Channel>(
+  channel: C,
   c: Context,
-  channel: Channel,
-  payload: ChannelPayloadMap[Channel],
-  override?: NotificationProviderConfig[Channel]
+  override?: NotificationProviderConfig[C]
+) => TypedProvider<C> | null
+
+export type SendNotification = <C extends Channel>(
+  c: Context,
+  channel: C,
+  payload: ChannelPayloadMap[C],
+  override?: NotificationProviderConfig[C]
 ) => Promise<NotificationResult>

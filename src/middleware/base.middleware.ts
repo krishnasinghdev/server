@@ -9,11 +9,11 @@ export const attachDb = createMiddleware(async (c, next) => {
 })
 
 export const corsMiddleware = createMiddleware(async (c, next) => {
-  const RUNTIME_ENV = c.env.RUNTIME_ENV
-  const ALLOWED_METHODS = RUNTIME_ENV === "development" ? ["GET", "POST", "PATCH", "DELETE"] : ["GET", "HEAD"]
-  // TODO: If you want to allow other origins in production, add them to the CORS_ORIGIN.
   return cors({
-    origin: RUNTIME_ENV === "development" ? "*" : c.env.CORS_ORIGIN,
-    allowMethods: ALLOWED_METHODS,
+    origin: c.env.CORS_ORIGIN,
+    allowMethods: ["GET", "POST", "PATCH", "DELETE", "PUT", "OPTIONS"],
+    allowHeaders: ["Content-Type", "Authorization", "X-Tenant-Id"],
+    credentials: true,
+    exposeHeaders: ["Content-Type"],
   })(c, next)
 })

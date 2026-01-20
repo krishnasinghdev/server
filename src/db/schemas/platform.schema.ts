@@ -1,9 +1,10 @@
 import { sql } from "drizzle-orm"
 import { check, index, integer, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core"
 import { createInsertSchema, createSelectSchema, createUpdateSchema } from "drizzle-zod"
+import { z } from "zod"
 import { createdAt, id, idRef, updatedAt } from "./_base.schema"
 import { severityEnum } from "./_enums.schema"
-import { iamRoles } from "./role.schema"
+import { iamRoles } from "./iam-role.schema"
 import { users } from "./user.schema"
 
 // Platform Audit Logs
@@ -34,6 +35,10 @@ export const platformAuditLogsISchema = createInsertSchema(platformAuditLogs)
 export const platformAuditLogsSSchema = createSelectSchema(platformAuditLogs)
 export const platformAuditLogsUSchema = createUpdateSchema(platformAuditLogs)
 
+export type PlatformAuditLog = z.infer<typeof platformAuditLogsSSchema>
+export type NewPlatformAuditLog = z.infer<typeof platformAuditLogsISchema>
+export type PlatformAuditLogUpdate = z.infer<typeof platformAuditLogsUSchema>
+
 // Platform Role Assignments
 export const platformRoleAssignments = pgTable(
   "platform_role_assignments",
@@ -63,6 +68,10 @@ export const platformRoleAssignmentsISchema = createInsertSchema(platformRoleAss
 export const platformRoleAssignmentsSSchema = createSelectSchema(platformRoleAssignments)
 export const platformRoleAssignmentsUSchema = createUpdateSchema(platformRoleAssignments)
 
+export type PlatformRoleAssignment = z.infer<typeof platformRoleAssignmentsSSchema>
+export type NewPlatformRoleAssignment = z.infer<typeof platformRoleAssignmentsISchema>
+export type PlatformRoleAssignmentUpdate = z.infer<typeof platformRoleAssignmentsUSchema>
+
 // Platform Break Glass Events
 export const platformBreakGlassEvents = pgTable(
   "platform_break_glass_events",
@@ -81,30 +90,9 @@ export const platformBreakGlassEventsISchema = createInsertSchema(platformBreakG
 export const platformBreakGlassEventsSSchema = createSelectSchema(platformBreakGlassEvents)
 export const platformBreakGlassEventsUSchema = createUpdateSchema(platformBreakGlassEvents)
 
-// Security Events
-// High-volume table - consider partitioning by created_at for better performance
-export const securityEvents = pgTable(
-  "security_events",
-  {
-    id: id(),
-    user_id: integer("user_id").references(() => users.id, {
-      onDelete: "set null", // Keep event even if user is deleted
-    }),
-    event_type: text("event_type").notNull(),
-    severity: severityEnum("severity"),
-    metadata: jsonb("metadata"),
-    created_at: createdAt(),
-  },
-  (table) => [
-    index("idx_security_events_user").on(table.user_id),
-    index("idx_security_events_created_at").on(table.created_at),
-    index("idx_security_events_event_type").on(table.event_type),
-    index("idx_security_events_severity").on(table.severity),
-  ]
-)
-export const securityEventsISchema = createInsertSchema(securityEvents)
-export const securityEventsSSchema = createSelectSchema(securityEvents)
-export const securityEventsUSchema = createUpdateSchema(securityEvents)
+export type PlatformBreakGlassEvent = z.infer<typeof platformBreakGlassEventsSSchema>
+export type NewPlatformBreakGlassEvent = z.infer<typeof platformBreakGlassEventsISchema>
+export type PlatformBreakGlassEventUpdate = z.infer<typeof platformBreakGlassEventsUSchema>
 
 // Platform Impersonation Sessions
 export const platformImpersonationSessions = pgTable(
@@ -131,6 +119,10 @@ export const platformImpersonationSessions = pgTable(
 export const platformImpersonationSessionsISchema = createInsertSchema(platformImpersonationSessions)
 export const platformImpersonationSessionsSSchema = createSelectSchema(platformImpersonationSessions)
 export const platformImpersonationSessionsUSchema = createUpdateSchema(platformImpersonationSessions)
+
+export type PlatformImpersonationSession = z.infer<typeof platformImpersonationSessionsSSchema>
+export type NewPlatformImpersonationSession = z.infer<typeof platformImpersonationSessionsISchema>
+export type PlatformImpersonationSessionUpdate = z.infer<typeof platformImpersonationSessionsUSchema>
 
 // Security Incidents
 export const securityIncidents = pgTable(
@@ -160,3 +152,36 @@ export const securityIncidents = pgTable(
 export const securityIncidentsISchema = createInsertSchema(securityIncidents)
 export const securityIncidentsSSchema = createSelectSchema(securityIncidents)
 export const securityIncidentsUSchema = createUpdateSchema(securityIncidents)
+
+export type SecurityIncident = z.infer<typeof securityIncidentsSSchema>
+export type NewSecurityIncident = z.infer<typeof securityIncidentsISchema>
+export type SecurityIncidentUpdate = z.infer<typeof securityIncidentsUSchema>
+
+// Security Events
+// High-volume table - consider partitioning by created_at for better performance
+export const securityEvents = pgTable(
+  "security_events",
+  {
+    id: id(),
+    user_id: integer("user_id").references(() => users.id, {
+      onDelete: "set null", // Keep event even if user is deleted
+    }),
+    event_type: text("event_type").notNull(),
+    severity: severityEnum("severity"),
+    metadata: jsonb("metadata"),
+    created_at: createdAt(),
+  },
+  (table) => [
+    index("idx_security_events_user").on(table.user_id),
+    index("idx_security_events_created_at").on(table.created_at),
+    index("idx_security_events_event_type").on(table.event_type),
+    index("idx_security_events_severity").on(table.severity),
+  ]
+)
+export const securityEventsISchema = createInsertSchema(securityEvents)
+export const securityEventsSSchema = createSelectSchema(securityEvents)
+export const securityEventsUSchema = createUpdateSchema(securityEvents)
+
+export type SecurityEvent = z.infer<typeof securityEventsSSchema>
+export type NewSecurityEvent = z.infer<typeof securityEventsISchema>
+export type SecurityEventUpdate = z.infer<typeof securityEventsUSchema>

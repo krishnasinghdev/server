@@ -1,555 +1,549 @@
-### Remaining Minor Issues and Risks
-
-These are polish items—none are blockers, but addressing them prevents subtle bugs or audit findings.
-
-1. **Field Nullability Inconsistencies**:
-   - `privacy_subject_requests.processed_by`: Declared NOT NULL, but FK is ON DELETE SET NULL. If a processor user is deleted mid-process, it violates NOT NULL. (Same for `security_incidents.assigned_to`.)
-   - **Risk**: Constraint violations during deletes; minor integrity hit.
-
-2. **Redundancy in Timestamps**:
-   - `privacy_user_consents`: Both `created_at` and `granted_at` default to `now()`. If creation == grant, it's duplicate data.
-   - `security_incidents`: Added `created_at`/`updated_at`, but `detected_at` overlaps with `created_at`—use one for "when incident occurred" vs. "when logged."
-
-3. **Missing Enforcement/Automation**:
-   - `personal_data_registry`: Still declarative; no triggers for auto-retention (e.g., delete after `retention_days`).
-   - No sync between `billing_tenant_subscriptions.subscription_seat` and `tenant_members` count—manual drift possible.
-   - `billing_invoices`: No FK to `billing_tenant_subscriptions` for period linking (e.g., invoice per sub period).
-
-4. **Compliance Gaps**:
-   - `security_incidents`: Lacks a `status` enum (e.g., 'open', 'investigating', 'resolved') for workflow tracking—your `resolution` text is good but not structured.
-   - `tenants.status`: Text field is flexible but error-prone; enum would enforce values like 'active', 'suspended', 'archived'.
-   - No consent versioning (e.g., if consents update, track diffs).
-
-5. **Performance/Scalability**:
-   - High-volume tables (`platform_audit_logs`, `security_events`) unpartitioned—queries over years could slow.
-   - JSONB fields (`metadata`, `payload`, `export_data`) lack GIN indexes for content searches.
-   - Index naming: Minor, but "idx*usage_overage_charges*\*" refs non-existent table (it's `usage_overage_fees`).
-   - Overage fees: `total_amount` is stored; consider a computed column/view for `units_used * unit_price` validation.
-
-6. **General**:
-   - `user.email_unique`: Good, but consider partial index on non-deleted (WHERE deleted_at IS NULL) for perf.
-   - Enums: `status` in privacy requests is enum-based but incidents use text—standardize.
-   - No CHECKs: E.g., amounts >=0 in billing tables.
-
-### Recommendations
-
-Focus on quick wins: nullability, enums, and automation. I've included SQL for top priorities.
-
-#### 1. Fix Nullability and Add CHECKs
-
-```sql
--- Make optional fields nullable
-ALTER TABLE "privacy_subject_requests" ALTER COLUMN "processed_by" DROP NOT NULL;
-ALTER TABLE "security_incidents" ALTER COLUMN "assigned_to" DROP NOT NULL;
-
--- Add CHECKs for billing positivity/invariants
-ALTER TABLE "billing_invoices" ADD CONSTRAINT "positive_amounts_check"
-CHECK ("subscription_amount" >= 0 AND "usage_amount" >= 0 AND "proration_amount" >= 0
-       AND "refund_amount" >= 0 AND "total_amount" >= 0);
-ALTER TABLE "billing_invoices" ADD CONSTRAINT "total_calc_check"
-CHECK ("total_amount" = "subscription_amount" + "usage_amount" + "proration_amount" - "refund_amount");
-
--- Similar for other amount tables (one_time_payments, overage_fees)
-```
-
-#### 2. Enhance Compliance Fields
-
-```sql
--- Enum for incident status
-CREATE TYPE "incident_status" AS ENUM('open', 'investigating', 'resolved', 'closed');
-ALTER TABLE "security_incidents" ADD COLUMN "status" "incident_status" DEFAULT 'open' NOT NULL;
-
--- Enum for tenant status
-CREATE TYPE "tenant_status" AS ENUM('active', 'suspended', 'archived');
-ALTER TABLE "tenants" ALTER COLUMN "status" TYPE "tenant_status" USING ("status"::text::"tenant_status");
-ALTER TABLE "tenants" ADD CONSTRAINT "valid_status_check" CHECK ("status" IN ('active', 'suspended', 'archived'));
-
--- Consent versioning: Add to privacy_user_consents
-ALTER TABLE "privacy_user_consents" ADD COLUMN "version" integer DEFAULT 1 NOT NULL;
-ALTER TABLE "privacy_user_consents" ADD COLUMN "proof_hash" text;  -- e.g., SHA256(consent_text + granted_at)
-
--- Merge timestamps in consents
-ALTER TABLE "privacy_user_consents" DROP COLUMN "created_at";  -- Use granted_at/revoked_at
-```
-
-#### 3. Add Missing Links and Views
-
-```sql
--- FK from invoices to subs (add subscription_id to billing_invoices first)
-ALTER TABLE "billing_invoices" ADD COLUMN "subscription_id" integer;
-ALTER TABLE "billing_invoices" ADD CONSTRAINT "billing_invoices_subscription_id_fk"
-FOREIGN KEY ("subscription_id") REFERENCES "billing_tenant_subscriptions"("id") ON DELETE SET NULL;
-
--- View for seat sync (query in app or trigger)
-CREATE VIEW "tenant_seat_summary" AS
-SELECT t.id AS tenant_id, COUNT(m.id) AS current_members
-FROM "tenants" t
-LEFT JOIN "tenant_members" m ON t.id = m.tenant_id AND m.member_type = 'member'
-GROUP BY t.id;
-```
-
-#### 4. Performance Tweaks
-
-```sql
--- GIN for JSONB
-CREATE INDEX "audit_logs_metadata_gin" ON "platform_audit_logs" USING GIN ("metadata");
-CREATE INDEX "payment_events_payload_gin" ON "billing_payment_events" USING GIN ("payload");
-
--- Partition logs (example for audit_logs by month)
-CREATE TABLE "platform_audit_logs_2026_01" PARTITION OF "platform_audit_logs"
-FOR VALUES FROM ('2026-01-01') TO ('2026-02-01');
--- Add more partitions via script; use pg_partman extension for automation.
-
--- Partial unique on emails (non-deleted)
-CREATE UNIQUE INDEX "user_email_unique_non_deleted" ON "user" ("email")
-WHERE "deleted_at" IS NULL;
-DROP INDEX "user_email_unique";  -- Replace with partial
-```
-
-#### 5. Automation and RLS
-
-- **Retention Triggers**: Use pg_cron or app job: `DELETE FROM table WHERE created_at < NOW() - INTERVAL 'retention_days' DAY` based on registry.
-- **Seat Sync Trigger**: On INSERT/DELETE in `tenant_members`, update `billing_tenant_subscriptions.subscription_seat = (SELECT COUNT(*) FROM tenant_members WHERE tenant_id = NEW.tenant_id)`.
-- **RLS**: As before—enable on tenant tables and set `current_setting('app.current_tenant_id')`.
-- **Test**: Run EXPLAIN ANALYZE on common queries (e.g., tenant usage report) to validate indexes.
-
-This iteration solves the core issues—kudos! If you implement the nullability/CHECKs and RLS, you're golden. Share if you want help with triggers, a full migration diff, or app pseudocode for compliance flows. What's next—populating seed data or query examples?
+CREATE TYPE "public"."billing_interval" AS ENUM('one_time', 'monthly', 'yearly');--> statement-breakpoint
+CREATE TYPE "public"."billing_state" AS ENUM('trial', 'active', 'past_due', 'canceled');--> statement-breakpoint
+CREATE TYPE "public"."currency" AS ENUM('USD', 'INR', 'EUR', 'GBP');--> statement-breakpoint
+CREATE TYPE "public"."deletion_strategy" AS ENUM('anonymize', 'delete', 'archive');--> statement-breakpoint
+CREATE TYPE "public"."invoice_status" AS ENUM('open', 'paid', 'failed');--> statement-breakpoint
+CREATE TYPE "public"."ledger_source" AS ENUM('billing', 'admin', 'promo');--> statement-breakpoint
+CREATE TYPE "public"."member_type" AS ENUM('member', 'guest');--> statement-breakpoint
+CREATE TYPE "public"."payment_provider" AS ENUM('dodo', 'polar', 'stripe');--> statement-breakpoint
+CREATE TYPE "public"."payment_reason" AS ENUM('limited_access', 'topup', 'addon');--> statement-breakpoint
+CREATE TYPE "public"."payment_status" AS ENUM('pending', 'succeeded', 'failed');--> statement-breakpoint
+CREATE TYPE "public"."plan_key" AS ENUM('starter', 'plus', 'business', 'enterprise');--> statement-breakpoint
+CREATE TYPE "public"."privacy_request_status" AS ENUM('pending', 'completed', 'rejected');--> statement-breakpoint
+CREATE TYPE "public"."privacy_request_type" AS ENUM('access', 'deletion');--> statement-breakpoint
+CREATE TYPE "public"."severity" AS ENUM('low', 'medium', 'high', 'critical');--> statement-breakpoint
+CREATE TYPE "public"."subscription_status" AS ENUM('active', 'trialing', 'past_due', 'canceled');--> statement-breakpoint
+CREATE TYPE "public"."iam_role_scope" AS ENUM('platform', 'tenant');--> statement-breakpoint
+CREATE TYPE "public"."tenant_invitation_status" AS ENUM('pending', 'accepted', 'rejected', 'expired', 'revoked');--> statement-breakpoint
+CREATE TABLE "billing_customers" (
+"id" serial PRIMARY KEY NOT NULL,
+"tenant_id" integer NOT NULL,
+"provider" "payment_provider" NOT NULL,
+"provider_customer_id" text NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+CONSTRAINT "billing_customers_tenant_id_provider_unique" UNIQUE("tenant_id","provider")
+);
+--> statement-breakpoint
+CREATE TABLE "billing_invoices" (
+"id" serial PRIMARY KEY NOT NULL,
+"uuid" uuid DEFAULT gen_random_uuid() NOT NULL,
+"tenant_id" integer NOT NULL,
+"provider_invoice_id" text,
+"period" date NOT NULL,
+"subscription_amount" integer NOT NULL,
+"usage_amount" integer NOT NULL,
+"proration_amount" integer DEFAULT 0,
+"refund_amount" integer DEFAULT 0,
+"total_amount" integer NOT NULL,
+"currency" "currency" NOT NULL,
+"status" "invoice_status" NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+CONSTRAINT "billing_invoices_uuid_unique" UNIQUE("uuid"),
+CONSTRAINT "chk_subscription_amount_nonnegative" CHECK (subscription_amount >= 0),
+CONSTRAINT "chk_usage_amount_nonnegative" CHECK (usage_amount >= 0),
+CONSTRAINT "chk_refund_amount_nonnegative" CHECK (refund_amount >= 0),
+CONSTRAINT "chk_total_amount_nonnegative" CHECK (total_amount >= 0)
+);
+--> statement-breakpoint
+CREATE TABLE "billing_one_time_payments" (
+"id" serial PRIMARY KEY NOT NULL,
+"uuid" uuid DEFAULT gen_random_uuid() NOT NULL,
+"tenant_id" integer NOT NULL,
+"provider_payment_id" text NOT NULL,
+"amount" integer NOT NULL,
+"currency" "currency" NOT NULL,
+"status" "payment_status" NOT NULL,
+"reason" "payment_reason" NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+CONSTRAINT "billing_one_time_payments_uuid_unique" UNIQUE("uuid"),
+CONSTRAINT "chk_amount_nonnegative" CHECK (amount >= 0)
+);
+--> statement-breakpoint
+CREATE TABLE "billing_payment_events" (
+"id" serial PRIMARY KEY NOT NULL,
+"uuid" uuid DEFAULT gen_random_uuid() NOT NULL,
+"tenant_id" integer NOT NULL,
+"provider_event_id" text NOT NULL,
+"event_type" text NOT NULL,
+"payload" jsonb NOT NULL,
+"processed" boolean DEFAULT false NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+CONSTRAINT "billing_payment_events_uuid_unique" UNIQUE("uuid"),
+CONSTRAINT "billing_payment_events_provider_event_id_unique" UNIQUE("provider_event_id")
+);
+--> statement-breakpoint
+CREATE TABLE "billing_plan_features" (
+"id" serial PRIMARY KEY NOT NULL,
+"plan_id" integer NOT NULL,
+"feature_key" text NOT NULL,
+"included_units" integer NOT NULL,
+"overage_price" integer,
+"workspace_count" integer DEFAULT 1 NOT NULL,
+"guest_count" integer DEFAULT 10 NOT NULL,
+"member_seat" integer DEFAULT 100 NOT NULL,
+CONSTRAINT "billing_plan_features_plan_id_feature_key_unique" UNIQUE("plan_id","feature_key"),
+CONSTRAINT "chk_included_units_nonnegative" CHECK (included_units >= 0),
+CONSTRAINT "chk_overage_price_nonnegative" CHECK (overage_price IS NULL OR overage_price >= 0),
+CONSTRAINT "chk_workspace_count_nonnegative" CHECK (workspace_count >= 0),
+CONSTRAINT "chk_guest_count_nonnegative" CHECK (guest_count >= 0),
+CONSTRAINT "chk_member_seat_valid" CHECK (member_seat >= -1)
+);
+--> statement-breakpoint
+CREATE TABLE "billing_plan_prices" (
+"id" serial PRIMARY KEY NOT NULL,
+"plan_id" integer NOT NULL,
+"provider" "payment_provider" NOT NULL,
+"provider_product_id" text NOT NULL,
+"provider_price_id" text,
+"currency" "currency" NOT NULL,
+"billing_interval" "billing_interval" NOT NULL,
+"is_active" boolean DEFAULT true NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+CONSTRAINT "billing_plan_prices_plan_id_provider_provider_price_id_unique" UNIQUE("plan_id","provider","provider_price_id")
+);
+--> statement-breakpoint
+CREATE TABLE "billing_plans" (
+"id" serial PRIMARY KEY NOT NULL,
+"name" text NOT NULL,
+"key" "plan_key" NOT NULL,
+"base_price" integer NOT NULL,
+"currency" "currency" NOT NULL,
+"billing_interval" "billing_interval" NOT NULL,
+"is_active" boolean DEFAULT true NOT NULL,
+"is_custom" boolean DEFAULT false NOT NULL,
+CONSTRAINT "billing_plans_key_unique" UNIQUE("key"),
+CONSTRAINT "chk_base_price_nonnegative" CHECK (base_price >= 0)
+);
+--> statement-breakpoint
+CREATE TABLE "billing_tenant_subscriptions" (
+"id" serial PRIMARY KEY NOT NULL,
+"uuid" uuid DEFAULT gen_random_uuid() NOT NULL,
+"tenant_id" integer NOT NULL,
+"plan_id" integer NOT NULL,
+"provider_subscription_id" text NOT NULL,
+"status" "subscription_status" NOT NULL,
+"current_period_start" date NOT NULL,
+"current_period_end" date NOT NULL,
+"subscription_seat" integer DEFAULT 1 NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+CONSTRAINT "billing_tenant_subscriptions_uuid_unique" UNIQUE("uuid"),
+CONSTRAINT "chk_subscription_seat_positive" CHECK (subscription_seat >= 1),
+CONSTRAINT "chk_period_range" CHECK (current_period_start < current_period_end)
+);
+--> statement-breakpoint
+CREATE TABLE "projects" (
+"id" serial PRIMARY KEY NOT NULL,
+"uuid" uuid DEFAULT gen_random_uuid() NOT NULL,
+"tenant_id" integer NOT NULL,
+"title" text NOT NULL,
+"description" text,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+CONSTRAINT "projects_uuid_unique" UNIQUE("uuid")
+);
+--> statement-breakpoint
+CREATE TABLE "platform_audit_logs" (
+"id" serial PRIMARY KEY NOT NULL,
+"actor_user_id" integer,
+"action" text NOT NULL,
+"target_type" text,
+"target_id" text,
+"metadata" jsonb,
+"ip_address" text,
+"user_agent" text,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "platform_break_glass_events" (
+"id" serial PRIMARY KEY NOT NULL,
+"user_id" integer NOT NULL,
+"activated_at" timestamp with time zone DEFAULT now() NOT NULL,
+"deactivated_at" timestamp with time zone,
+"reason" text,
+CONSTRAINT "chk_break_glass_date_range" CHECK (deactivated_at IS NULL OR deactivated_at >= activated_at)
+);
+--> statement-breakpoint
+CREATE TABLE "platform_impersonation_sessions" (
+"id" serial PRIMARY KEY NOT NULL,
+"admin_user_id" integer NOT NULL,
+"target_user_id" integer NOT NULL,
+"started_at" timestamp with time zone DEFAULT now() NOT NULL,
+"ended_at" timestamp with time zone,
+"reason" text,
+CONSTRAINT "chk_impersonation_date_range" CHECK (ended_at IS NULL OR ended_at >= started_at)
+);
+--> statement-breakpoint
+CREATE TABLE "platform_role_assignments" (
+"id" serial PRIMARY KEY NOT NULL,
+"assigned_user_id" integer NOT NULL,
+"role_id" integer NOT NULL,
+"assigned_by" integer NOT NULL,
+"reason" text,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+"revoked_at" timestamp with time zone,
+CONSTRAINT "platform_role_assignments_assigned_user_id_role_id_unique" UNIQUE("assigned_user_id","role_id"),
+CONSTRAINT "chk_role_assignment_date_range" CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+);
+--> statement-breakpoint
+CREATE TABLE "security_events" (
+"id" serial PRIMARY KEY NOT NULL,
+"user_id" integer,
+"event_type" text NOT NULL,
+"severity" "severity",
+"metadata" jsonb,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "security_incidents" (
+"id" serial PRIMARY KEY NOT NULL,
+"incident_type" text NOT NULL,
+"severity" "severity",
+"description" text,
+"assigned_to" integer,
+"detected_at" timestamp with time zone DEFAULT now() NOT NULL,
+"resolved_at" timestamp with time zone,
+"resolution" text,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+CONSTRAINT "chk_incident_date_range" CHECK (resolved_at IS NULL OR resolved_at >= detected_at)
+);
+--> statement-breakpoint
+CREATE TABLE "iam_permissions" (
+"id" serial PRIMARY KEY NOT NULL,
+"key" text NOT NULL,
+"resource" text NOT NULL,
+"action" text NOT NULL,
+"description" text,
+CONSTRAINT "iam_permissions_key_unique" UNIQUE("key")
+);
+--> statement-breakpoint
+CREATE TABLE "iam_role_permissions" (
+"role_id" integer NOT NULL,
+"permission_id" integer NOT NULL,
+CONSTRAINT "iam_role_permissions_role_id_permission_id_pk" PRIMARY KEY("role_id","permission_id")
+);
+--> statement-breakpoint
+CREATE TABLE "iam_roles" (
+"id" serial PRIMARY KEY NOT NULL,
+"key" text NOT NULL,
+"display_name" text NOT NULL,
+"description" text,
+"is_system" boolean DEFAULT false NOT NULL,
+"is_break_glass" boolean DEFAULT false NOT NULL,
+"scope" "iam_role_scope" DEFAULT 'tenant' NOT NULL,
+CONSTRAINT "iam_roles_key_unique" UNIQUE("key")
+);
+--> statement-breakpoint
+CREATE TABLE "tenant_credit_ledgers" (
+"id" serial PRIMARY KEY NOT NULL,
+"tenant_id" integer NOT NULL,
+"delta" integer NOT NULL,
+"reason" text NOT NULL,
+"source" "ledger_source" NOT NULL,
+"idempotency_key" text NOT NULL,
+"reference_type" text NOT NULL,
+"reference_id" text NOT NULL,
+"expires_at" timestamp with time zone NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "tenant_invitations" (
+"id" serial PRIMARY KEY NOT NULL,
+"tenant_id" integer NOT NULL,
+"email" text NOT NULL,
+"status" "tenant_invitation_status" DEFAULT 'pending' NOT NULL,
+"member_type" "member_type" DEFAULT 'member' NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+CONSTRAINT "tenant_invitations_tenant_id_email_unique" UNIQUE("tenant_id","email")
+);
+--> statement-breakpoint
+CREATE TABLE "tenant_members" (
+"id" serial PRIMARY KEY NOT NULL,
+"tenant_id" integer NOT NULL,
+"user_id" integer NOT NULL,
+"role_id" integer NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+"member_type" "member_type" DEFAULT 'member' NOT NULL,
+CONSTRAINT "tenant_members_tenant_id_user_id_unique" UNIQUE("tenant_id","user_id")
+);
+--> statement-breakpoint
+CREATE TABLE "tenants" (
+"id" serial PRIMARY KEY NOT NULL,
+"uuid" uuid DEFAULT gen_random_uuid() NOT NULL,
+"name" text NOT NULL,
+"owner_id" integer NOT NULL,
+"plan" "plan_key" DEFAULT 'starter' NOT NULL,
+"billing_state" "billing_state" DEFAULT 'trial' NOT NULL,
+"status" text DEFAULT 'active' NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+"deleted_at" timestamp with time zone,
+CONSTRAINT "tenants_uuid_unique" UNIQUE("uuid")
+);
+--> statement-breakpoint
+CREATE TABLE "user_accounts" (
+"id" serial PRIMARY KEY NOT NULL,
+"uuid" uuid DEFAULT gen_random_uuid() NOT NULL,
+"account_id" text NOT NULL,
+"provider_id" text NOT NULL,
+"user_id" integer NOT NULL,
+"access_token" text,
+"refresh_token" text,
+"id_token" text,
+"access_token_expires_at" timestamp,
+"refresh_token_expires_at" timestamp,
+"scope" text,
+"password" text,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+CONSTRAINT "user_accounts_uuid_unique" UNIQUE("uuid")
+);
+--> statement-breakpoint
+CREATE TABLE "user_data_registries" (
+"id" serial PRIMARY KEY NOT NULL,
+"table_name" text NOT NULL,
+"column_name" text NOT NULL,
+"data_category" text,
+"retention_days" integer,
+"deletion_strategy" "deletion_strategy" NOT NULL,
+"is_sensitive" boolean DEFAULT false,
+CONSTRAINT "user_data_registries_table_name_column_name_unique" UNIQUE("table_name","column_name"),
+CONSTRAINT "chk_retention_days_nonnegative" CHECK (retention_days IS NULL OR retention_days >= 0)
+);
+--> statement-breakpoint
+CREATE TABLE "user_privacy_consents" (
+"id" serial PRIMARY KEY NOT NULL,
+"user_id" integer NOT NULL,
+"consent_type" text NOT NULL,
+"granted" boolean NOT NULL,
+"source" text,
+"granted_at" timestamp with time zone DEFAULT now() NOT NULL,
+"granted_ip" text,
+"granted_user_agent" text,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+"revoked_at" timestamp with time zone,
+"revoked_ip" text,
+"revoked_user_agent" text,
+CONSTRAINT "chk_consent_date_range" CHECK (revoked_at IS NULL OR revoked_at >= granted_at)
+);
+--> statement-breakpoint
+CREATE TABLE "user_privacy_subject_requests" (
+"id" serial PRIMARY KEY NOT NULL,
+"user_id" integer NOT NULL,
+"request_type" "privacy_request_type",
+"status" "privacy_request_status",
+"processed_by" integer,
+"export_format" text DEFAULT 'json',
+"export_data" jsonb,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+"processed_at" timestamp with time zone,
+CONSTRAINT "chk_privacy_request_date_range" CHECK (processed_at IS NULL OR processed_at >= created_at)
+);
+--> statement-breakpoint
+CREATE TABLE "user_sessions" (
+"id" serial PRIMARY KEY NOT NULL,
+"uuid" uuid DEFAULT gen_random_uuid() NOT NULL,
+"expires_at" timestamp with time zone NOT NULL,
+"token" text NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+"ip_address" text,
+"user_agent" text,
+"user_id" integer NOT NULL,
+CONSTRAINT "user_sessions_uuid_unique" UNIQUE("uuid"),
+CONSTRAINT "user_sessions_token_unique" UNIQUE("token"),
+CONSTRAINT "chk_session_expires_after_created" CHECK (expires_at >= created_at)
+);
+--> statement-breakpoint
+CREATE TABLE "user_verifications" (
+"id" serial PRIMARY KEY NOT NULL,
+"uuid" uuid DEFAULT gen_random_uuid() NOT NULL,
+"identifier" text NOT NULL,
+"value" text NOT NULL,
+"expires_at" timestamp with time zone NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+CONSTRAINT "user_verifications_uuid_unique" UNIQUE("uuid"),
+CONSTRAINT "chk_verification_expires_after_created" CHECK (expires_at >= created_at)
+);
+--> statement-breakpoint
+CREATE TABLE "users" (
+"id" serial PRIMARY KEY NOT NULL,
+"uuid" uuid DEFAULT gen_random_uuid() NOT NULL,
+"name" text NOT NULL,
+"email" text NOT NULL,
+"email_verified" boolean DEFAULT false NOT NULL,
+"avatar" text DEFAULT '' NOT NULL,
+"email_transactional" boolean DEFAULT true NOT NULL,
+"email_promotional" boolean DEFAULT true NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+"is_anonymized" boolean DEFAULT false NOT NULL,
+"anonymized_at" timestamp with time zone,
+"deleted_at" timestamp with time zone,
+CONSTRAINT "users_uuid_unique" UNIQUE("uuid"),
+CONSTRAINT "users_email_unique" UNIQUE("email")
+);
+--> statement-breakpoint
+CREATE TABLE "usage_aggregates" (
+"id" serial PRIMARY KEY NOT NULL,
+"tenant_id" integer NOT NULL,
+"feature_key" text NOT NULL,
+"period" date NOT NULL,
+"units_used" integer NOT NULL,
+CONSTRAINT "usage_aggregates_tenant_id_feature_key_period_unique" UNIQUE("tenant_id","feature_key","period"),
+CONSTRAINT "chk_units_used_nonnegative" CHECK (units_used >= 0)
+);
+--> statement-breakpoint
+CREATE TABLE "usage_events" (
+"id" serial PRIMARY KEY NOT NULL,
+"tenant_id" integer NOT NULL,
+"feature_key" text NOT NULL,
+"units" integer NOT NULL,
+"idempotency_key" text NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+CONSTRAINT "usage_events_tenant_id_feature_key_idempotency_key_unique" UNIQUE("tenant_id","feature_key","idempotency_key")
+);
+--> statement-breakpoint
+CREATE TABLE "usage_overage_fees" (
+"id" serial PRIMARY KEY NOT NULL,
+"tenant_id" integer NOT NULL,
+"period" date NOT NULL,
+"feature_key" text NOT NULL,
+"units_used" integer NOT NULL,
+"unit_price" integer NOT NULL,
+"total_amount" integer NOT NULL,
+"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+CONSTRAINT "chk_units_used_nonnegative" CHECK (units_used >= 0),
+CONSTRAINT "chk_unit_price_nonnegative" CHECK (unit_price >= 0),
+CONSTRAINT "chk_total_amount_nonnegative" CHECK (total_amount >= 0)
+);
+--> statement-breakpoint
+ALTER TABLE "billing_customers" ADD CONSTRAINT "billing_customers_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "billing_invoices" ADD CONSTRAINT "billing_invoices_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "billing_one_time_payments" ADD CONSTRAINT "billing_one_time_payments_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "billing_payment_events" ADD CONSTRAINT "billing_payment_events_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "billing_plan_features" ADD CONSTRAINT "billing_plan_features_plan_id_billing_plans_id_fk" FOREIGN KEY ("plan_id") REFERENCES "public"."billing_plans"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "billing_plan_prices" ADD CONSTRAINT "billing_plan_prices_plan_id_billing_plans_id_fk" FOREIGN KEY ("plan_id") REFERENCES "public"."billing_plans"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "billing_tenant_subscriptions" ADD CONSTRAINT "billing_tenant_subscriptions_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "billing_tenant_subscriptions" ADD CONSTRAINT "billing_tenant_subscriptions_plan_id_billing_plans_id_fk" FOREIGN KEY ("plan_id") REFERENCES "public"."billing_plans"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "projects" ADD CONSTRAINT "projects_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "platform_audit_logs" ADD CONSTRAINT "platform_audit_logs_actor_user_id_users_id_fk" FOREIGN KEY ("actor_user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "platform_break_glass_events" ADD CONSTRAINT "platform_break_glass_events_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "platform_impersonation_sessions" ADD CONSTRAINT "platform_impersonation_sessions_admin_user_id_users_id_fk" FOREIGN KEY ("admin_user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "platform_impersonation_sessions" ADD CONSTRAINT "platform_impersonation_sessions_target_user_id_users_id_fk" FOREIGN KEY ("target_user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "platform_role_assignments" ADD CONSTRAINT "platform_role_assignments_assigned_user_id_users_id_fk" FOREIGN KEY ("assigned_user_id") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "platform_role_assignments" ADD CONSTRAINT "platform_role_assignments_role_id_iam_roles_id_fk" FOREIGN KEY ("role_id") REFERENCES "public"."iam_roles"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "platform_role_assignments" ADD CONSTRAINT "platform_role_assignments_assigned_by_users_id_fk" FOREIGN KEY ("assigned_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "security_events" ADD CONSTRAINT "security_events_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "security_incidents" ADD CONSTRAINT "security_incidents_assigned_to_users_id_fk" FOREIGN KEY ("assigned_to") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "iam_role_permissions" ADD CONSTRAINT "iam_role_permissions_role_id_iam_roles_id_fk" FOREIGN KEY ("role_id") REFERENCES "public"."iam_roles"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "iam_role_permissions" ADD CONSTRAINT "iam_role_permissions_permission_id_iam_permissions_id_fk" FOREIGN KEY ("permission_id") REFERENCES "public"."iam_permissions"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tenant_credit_ledgers" ADD CONSTRAINT "tenant_credit_ledgers_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tenant_invitations" ADD CONSTRAINT "tenant_invitations_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tenant_members" ADD CONSTRAINT "tenant_members_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tenant_members" ADD CONSTRAINT "tenant_members_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tenant_members" ADD CONSTRAINT "tenant_members_role_id_iam_roles_id_fk" FOREIGN KEY ("role_id") REFERENCES "public"."iam_roles"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tenants" ADD CONSTRAINT "tenants_owner_id_users_id_fk" FOREIGN KEY ("owner_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "user_accounts" ADD CONSTRAINT "user_accounts_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "user_privacy_consents" ADD CONSTRAINT "user_privacy_consents_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "user_privacy_subject_requests" ADD CONSTRAINT "user_privacy_subject_requests_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "user_privacy_subject_requests" ADD CONSTRAINT "user_privacy_subject_requests_processed_by_users_id_fk" FOREIGN KEY ("processed_by") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "user_sessions" ADD CONSTRAINT "user_sessions_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "usage_aggregates" ADD CONSTRAINT "usage_aggregates_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "usage_events" ADD CONSTRAINT "usage_events_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "usage_overage_fees" ADD CONSTRAINT "usage_overage_fees_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "idx_billing_customers_tenant" ON "billing_customers" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "idx_billing_invoices_tenant" ON "billing_invoices" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "idx_billing_invoices_provider_invoice_id" ON "billing_invoices" USING btree ("provider_invoice_id");--> statement-breakpoint
+CREATE INDEX "idx_billing_invoices_created_at" ON "billing_invoices" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "idx_billing_invoices_period" ON "billing_invoices" USING btree ("period");--> statement-breakpoint
+CREATE INDEX "idx_billing_one_time_payments_tenant" ON "billing_one_time_payments" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "idx_billing_one_time_payments_created_at" ON "billing_one_time_payments" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "idx_billing_payment_events_tenant" ON "billing_payment_events" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "idx_billing_payment_events_created_at" ON "billing_payment_events" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "idx_billing_payment_events_processed" ON "billing_payment_events" USING btree ("processed");--> statement-breakpoint
+CREATE INDEX "idx_billing_payment_events_event_type" ON "billing_payment_events" USING btree ("event_type");--> statement-breakpoint
+CREATE INDEX "idx_tenant_subscriptions_tenant" ON "billing_tenant_subscriptions" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "idx_tenant_subscriptions_plan" ON "billing_tenant_subscriptions" USING btree ("plan_id");--> statement-breakpoint
+CREATE INDEX "idx_tenant_subscriptions_created_at" ON "billing_tenant_subscriptions" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "idx_projects_tenant" ON "projects" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "idx_projects_created_at" ON "projects" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "idx_platform_audit_logs_actor" ON "platform_audit_logs" USING btree ("actor_user_id");--> statement-breakpoint
+CREATE INDEX "idx_platform_audit_logs_created_at" ON "platform_audit_logs" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "idx_platform_audit_logs_action" ON "platform_audit_logs" USING btree ("action");--> statement-breakpoint
+CREATE INDEX "idx_platform_impersonation_sessions_admin" ON "platform_impersonation_sessions" USING btree ("admin_user_id");--> statement-breakpoint
+CREATE INDEX "idx_platform_impersonation_sessions_target" ON "platform_impersonation_sessions" USING btree ("target_user_id");--> statement-breakpoint
+CREATE INDEX "idx_platform_role_assignments_user" ON "platform_role_assignments" USING btree ("assigned_user_id");--> statement-breakpoint
+CREATE INDEX "idx_platform_role_assignments_role" ON "platform_role_assignments" USING btree ("role_id");--> statement-breakpoint
+CREATE INDEX "idx_security_events_user" ON "security_events" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "idx_security_events_created_at" ON "security_events" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "idx_security_events_event_type" ON "security_events" USING btree ("event_type");--> statement-breakpoint
+CREATE INDEX "idx_security_events_severity" ON "security_events" USING btree ("severity");--> statement-breakpoint
+CREATE INDEX "idx_security_incidents_assigned_to" ON "security_incidents" USING btree ("assigned_to");--> statement-breakpoint
+CREATE INDEX "idx_security_incidents_detected_at" ON "security_incidents" USING btree ("detected_at");--> statement-breakpoint
+CREATE INDEX "idx_security_incidents_severity" ON "security_incidents" USING btree ("severity");--> statement-breakpoint
+CREATE INDEX "idx_security_incidents_incident_type" ON "security_incidents" USING btree ("incident_type");--> statement-breakpoint
+CREATE INDEX "idx_tenant_credit_ledger_tenant" ON "tenant_credit_ledgers" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "idx_tenant_credit_ledger_created_at" ON "tenant_credit_ledgers" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "idx_tenant_credit_ledger_idempotency_key" ON "tenant_credit_ledgers" USING btree ("idempotency_key");--> statement-breakpoint
+CREATE INDEX "idx_tenant_credit_ledger_reference_type" ON "tenant_credit_ledgers" USING btree ("reference_type");--> statement-breakpoint
+CREATE INDEX "idx_tenant_credit_ledger_reference_id" ON "tenant_credit_ledgers" USING btree ("reference_id");--> statement-breakpoint
+CREATE INDEX "idx_tenant_credit_ledger_expires_at" ON "tenant_credit_ledgers" USING btree ("expires_at");--> statement-breakpoint
+CREATE INDEX "idx_tenant_invitations_tenant" ON "tenant_invitations" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "idx_tenant_invitations_email" ON "tenant_invitations" USING btree ("email");--> statement-breakpoint
+CREATE INDEX "idx_tenant_members_tenant" ON "tenant_members" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "idx_tenant_members_user" ON "tenant_members" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "idx_tenant_members_role" ON "tenant_members" USING btree ("role_id");--> statement-breakpoint
+CREATE INDEX "idx_tenants_name" ON "tenants" USING btree ("name");--> statement-breakpoint
+CREATE INDEX "idx_tenants_status" ON "tenants" USING btree ("status");--> statement-breakpoint
+CREATE INDEX "idx_tenants_created_at" ON "tenants" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "account_user_id_idx" ON "user_accounts" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "idx_user_data_registries_table" ON "user_data_registries" USING btree ("table_name");--> statement-breakpoint
+CREATE INDEX "idx_user_privacy_consents_user" ON "user_privacy_consents" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "idx_user_privacy_consents_consent_type" ON "user_privacy_consents" USING btree ("consent_type");--> statement-breakpoint
+CREATE INDEX "idx_user_privacy_consents_granted_at" ON "user_privacy_consents" USING btree ("granted_at");--> statement-breakpoint
+CREATE INDEX "idx_user_privacy_subject_requests_user" ON "user_privacy_subject_requests" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "idx_user_privacy_subject_requests_status" ON "user_privacy_subject_requests" USING btree ("status");--> statement-breakpoint
+CREATE INDEX "idx_user_privacy_subject_requests_created_at" ON "user_privacy_subject_requests" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "idx_user_privacy_subject_requests_processed_by" ON "user_privacy_subject_requests" USING btree ("processed_by");--> statement-breakpoint
+CREATE INDEX "session_user_id_idx" ON "user_sessions" USING btree ("user_id");--> statement-breakpoint
+CREATE INDEX "verification_identifier_idx" ON "user_verifications" USING btree ("identifier");--> statement-breakpoint
+CREATE INDEX "idx_usage_aggregates_tenant" ON "usage_aggregates" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "idx_usage_aggregates_period" ON "usage_aggregates" USING btree ("period");--> statement-breakpoint
+CREATE INDEX "idx_usage_events_tenant" ON "usage_events" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "idx_usage_events_created_at" ON "usage_events" USING btree ("created_at");--> statement-breakpoint
+CREATE INDEX "idx_usage_events_feature_key" ON "usage_events" USING btree ("feature_key");--> statement-breakpoint
+CREATE INDEX "idx_usage_events_idempotency_key" ON "usage_events" USING btree ("tenant_id","idempotency_key");--> statement-breakpoint
+CREATE INDEX "idx_usage_overage_charges_tenant" ON "usage_overage_fees" USING btree ("tenant_id");--> statement-breakpoint
+CREATE INDEX "idx_usage_overage_charges_period" ON "usage_overage_fees" USING btree ("period");--> statement-breakpoint
+CREATE INDEX "idx_usage_overage_charges_created_at" ON "usage_overage_fees" USING btree ("created_at");
 
 ---
 
-You already have a **very strong, production-grade schema**. From an ISO / GDPR / enterprise backend perspective, the data model is **sound**.
-I will therefore focus on **efficient, scalable, and secure route patterns** that _map cleanly_ to this schema and avoid common SaaS mistakes.
-
-I’ll structure this as a **senior backend review**, not a tutorial.
-
----
-
-## 1. Global API Design Principles (Non-Negotiable)
-
-### 1.1 API Versioning
-
-```
-/api/v1/...
-```
-
-Never expose raw tables without versioning. GDPR flows _will change_.
-
----
-
-### 1.2 Tenant Context Resolution (Critical)
-
-**Never trust tenant_id from the client.**
-
-**Pattern**
-
-- Tenant resolved from:
-  - Auth session → user_id
-  - tenant_members → tenant_id + role
-
-- Injected into request context
-
-```ts
-ctx.tenant = {
-  id,
-  role,
-  permissions,
-}
-```
-
-**Result**
-
-- All tenant-scoped routes are implicitly safe
-- Zero accidental cross-tenant access
-
----
-
-### 1.3 Route Classification (Important)
-
-You should separate APIs by **responsibility**, not tables:
-
-| Layer    | Purpose                        |
-| -------- | ------------------------------ |
-| Identity | Auth, sessions, user profile   |
-| Tenant   | Workspace, members, roles      |
-| Domain   | Projects, usage, credits       |
-| Billing  | Plans, subscriptions, invoices |
-| Privacy  | GDPR, consent, export          |
-| Platform | Audit, impersonation, security |
-
----
-
-## 2. Authentication & Identity Routes
-
-### Base
-
-```
-/api/v1/auth
-```
-
-### Routes
-
-```
-POST   /auth/login
-POST   /auth/logout
-POST   /auth/refresh
-POST   /auth/verify-email
-POST   /auth/reset-password
-```
-
-### Sessions
-
-```
-GET    /auth/sessions
-DELETE /auth/sessions/:sessionId
-```
-
-**Notes**
-
-- Maps cleanly to `auth_sessions`
-- Session revocation supports GDPR security requirements
-
----
-
-## 3. User Profile & Preferences
-
-```
-/api/v1/me
-```
-
-```
-GET    /me
-PATCH  /me
-DELETE /me (soft delete → GDPR workflow trigger)
-```
-
-Preferences:
-
-```
-PATCH /me/preferences/email
-```
-
-**Important**
-
-- `/me` never exposes internal IDs
-- Use UUID externally
-
----
-
-## 4. Tenant / Workspace Routes
-
-### Base
-
-```
-/api/v1/tenants
-```
-
-### Workspace lifecycle
-
-```
-POST   /tenants
-GET    /tenants
-GET    /tenants/:tenantId
-PATCH  /tenants/:tenantId
-DELETE /tenants/:tenantId   (soft delete)
-```
-
-Maps to:
-
-- `tenants`
-- `tenant_members`
-
----
-
-### Tenant Members
-
-```
-GET    /tenants/:tenantId/members
-POST   /tenants/:tenantId/members
-PATCH  /tenants/:tenantId/members/:userId
-DELETE /tenants/:tenantId/members/:userId
-```
-
-**Role & permission enforcement**
-
-- Derived from `iamRoles`
-- Checked via middleware, not handlers
-
----
-
-## 5. IAM (Roles & Permissions)
-
-### Platform-level (Admin only)
-
-```
-/api/v1/iam
-```
-
-```
-GET    /iam/roles
-POST   /iam/roles
-PATCH  /iam/roles/:roleId
-```
-
-```
-GET    /iam/permissions
-```
-
-Assignments:
-
-```
-POST   /iam/assignments
-DELETE /iam/assignments/:assignmentId
-```
-
-**Break-glass roles**
-
-- Enforced with additional confirmation + audit logs
-
----
-
-## 6. Projects (Domain Core)
-
-### Base
-
-```
-/api/v1/projects
-```
-
-```
-GET    /projects
-POST   /projects
-GET    /projects/:projectId
-PATCH  /projects/:projectId
-DELETE /projects/:projectId
-```
-
-**Tenant isolation**
-
-- Always via context
-- `projects.tenant_id = ctx.tenant.id`
-
----
-
-## 7. Billing & Payments (Strict Separation)
-
-### Plans (Public / Cached)
-
-```
-/api/v1/billing/plans
-```
-
-```
-GET /billing/plans
-```
-
----
-
-### Subscriptions
-
-```
-/api/v1/billing/subscription
-```
-
-```
-GET    /billing/subscription
-POST   /billing/subscription
-PATCH  /billing/subscription
-DELETE /billing/subscription
-```
-
-Maps to:
-
-- `billing_tenant_subscriptions`
-
----
-
-### Invoices
-
-```
-GET /billing/invoices
-GET /billing/invoices/:invoiceId
-```
-
----
-
-### One-Time Payments
-
-```
-POST /billing/payments/one-time
-GET  /billing/payments
-```
-
----
-
-### Provider Webhooks (Isolated)
-
-```
-POST /api/v1/webhooks/:provider
-```
-
-Examples:
-
-```
-/webhooks/stripe
-/webhooks/dodo
-/webhooks/polar
-```
-
-**Rules**
-
-- No auth middleware
-- Signature validation only
-- Idempotent processing via `billing_payment_events`
-
----
-
-## 8. Usage & Metering (High-Scale Design)
-
-### Internal (Service-to-Service)
-
-```
-POST /internal/usage/record
-```
-
-### Tenant View
-
-```
-GET /usage
-GET /usage/overages
-```
-
-**Design**
-
-- Writes → append-only (`usage_metered_usage`)
-- Reads → aggregated (`usage_aggregates`)
-
----
-
-## 9. Credits & Ledger
-
-```
-GET /credits
-GET /credits/ledger
-```
-
-Admin only:
-
-```
-POST /credits/adjust
-```
-
-Maps to:
-
-- `tenant_credit_ledger`
-
----
-
-## 10. Privacy & GDPR (Strong Point in Your Schema)
-
-### User-facing
-
-```
-/api/v1/privacy
-```
-
-```
-GET  /privacy/consents
-POST /privacy/consents
-```
-
-```
-POST /privacy/requests/access
-POST /privacy/requests/deletion
-GET  /privacy/requests
-```
-
-Maps to:
-
-- `privacy_subject_requests`
-- `privacy_user_consents`
-
----
-
-### Internal Processing
-
-```
-POST /internal/privacy/process/:requestId
-```
-
-Used by background workers only.
-
----
-
-## 11. Audit & Security (Non-Optional for ISO)
-
-### Audit Logs
-
-```
-GET /audit/logs
-```
-
-Maps to:
-
-- `platform_audit_logs`
-
----
-
-### Security Events
-
-```
-GET /security/events
-GET /security/incidents
-POST /security/incidents
-```
-
----
-
-### Impersonation
-
-```
-POST /platform/impersonate/:userId
-POST /platform/impersonate/exit
-```
-
-**Strict**
-
-- Requires break-glass role
-- Always audited
-
----
-
-## 12. Route Pattern Summary (Cheat Sheet)
-
-| Domain   | Prefix      |
-| -------- | ----------- |
-| Auth     | `/auth`     |
-| User     | `/me`       |
-| Tenant   | `/tenants`  |
-| Projects | `/projects` |
-| Billing  | `/billing`  |
-| Usage    | `/usage`    |
-| Privacy  | `/privacy`  |
-| Audit    | `/audit`    |
-| Security | `/security` |
-| Webhooks | `/webhooks` |
-| Internal | `/internal` |
-
----
-
-## 13. Final Senior Engineer Verdict
-
-### What You Did Extremely Well
-
-- Proper GDPR primitives
-- Append-only financial data
-- Clear separation of billing, usage, audit
-- Integer-based money storage (correct)
-
-### What These Route Patterns Give You
-
-- Horizontal scalability
-- Zero tenant leakage risk
-- Clean SOC2 / ISO audit story
-- Easy future split into microservices
-
----
+Trial behavior (auto-create tenant on signup or explicit creation?)
+ans: after signup,we check for invitation and create tenant if not found as why to increase tenant count for invited users.
+
+Whether every tenant must have a paid plan to create projects
+no, as we can create projects for free tenants with starter plan limits.
+Whether guests consume usage / credits
+yes, as we can create projects for free tenants.
+Whether credits expire globally or per purchase
+not sure now, will implement the best suitable logic.
+Whether platform admins are internal-only (not customers)
+what standard practices suggest for this for security and compliance reasons.
+
+proceed, but keep your output structured and concise, for each case like regular user signup, admin signup, guest signup, etc.
+i have already create these parent routes, hopefully it will keep to production grade setup that will stay stable and easy to maintain.
+
+v1Routes.route("/admin", adminRoutes)
+v1Routes.route("/billing", billingRoutes)
+v1Routes.route("/iam-roles", iamRoleRoutes)
+v1Routes.route("/internal", internalRoutes)
+v1Routes.route("/me", meRoutes)
+v1Routes.route("/platform", platformRoutes)
+v1Routes.route("/privacy", privacyRoutes)
+v1Routes.route("/projects", projectsRoutes)
+v1Routes.route("/security", securityRoutes)
+v1Routes.route("/tenants", tenantsRoutes)
+v1Routes.route("/usage", usageRoutes)

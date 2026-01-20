@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm"
 import { boolean, check, index, integer, jsonb, pgTable, text, timestamp, unique } from "drizzle-orm/pg-core"
 import { createInsertSchema, createSelectSchema, createUpdateSchema } from "drizzle-zod"
+import { z } from "zod"
 import { createdAt, deletedAt, expiresAt, id, idRef, updatedAt, uuidColumn } from "./_base.schema"
 import { privacyRequestTypeEnum, privacyRequestStatusEnum, deletionStrategyEnum } from "./_enums.schema"
 
@@ -14,6 +15,9 @@ export const users = pgTable("users", {
   avatar: text("avatar").notNull().default(""),
   email_transactional: boolean("email_transactional").default(true).notNull(),
   email_promotional: boolean("email_promotional").default(true).notNull(),
+  is_anonymized: boolean("is_anonymized").default(false).notNull(),
+  anonymized_at: timestamp("anonymized_at", { withTimezone: true }),
+  preferred_locale: text("preferred_locale").default("en-US"),
   created_at: createdAt(),
   updated_at: updatedAt(),
   deleted_at: deletedAt(),
@@ -21,6 +25,10 @@ export const users = pgTable("users", {
 export const usersISchema = createInsertSchema(users)
 export const usersSSchema = createSelectSchema(users)
 export const usersUSchema = createUpdateSchema(users)
+
+export type User = z.infer<typeof usersSSchema>
+export type NewUser = z.infer<typeof usersISchema>
+export type UserUpdate = z.infer<typeof usersUSchema>
 
 // User Sessions
 export const userSessions = pgTable(
@@ -45,6 +53,10 @@ export const userSessionsISchema = createInsertSchema(userSessions)
 export const userSessionsSSchema = createSelectSchema(userSessions)
 export const userSessionsUSchema = createUpdateSchema(userSessions)
 
+export type UserSession = z.infer<typeof userSessionsSSchema>
+export type NewUserSession = z.infer<typeof userSessionsISchema>
+export type UserSessionUpdate = z.infer<typeof userSessionsUSchema>
+
 // User Accounts
 export const userAccounts = pgTable(
   "user_accounts",
@@ -59,8 +71,8 @@ export const userAccounts = pgTable(
     access_token: text("access_token"),
     refresh_token: text("refresh_token"),
     id_token: text("id_token"),
-    access_token_expires_at: timestamp("access_token_expires_at"),
-    refresh_token_expires_at: timestamp("refresh_token_expires_at"),
+    access_token_expires_at: timestamp("access_token_expires_at", { withTimezone: true }),
+    refresh_token_expires_at: timestamp("refresh_token_expires_at", { withTimezone: true }),
     scope: text("scope"),
     password: text("password"),
     created_at: createdAt(),
@@ -71,6 +83,10 @@ export const userAccounts = pgTable(
 export const userAccountsISchema = createInsertSchema(userAccounts)
 export const userAccountsSSchema = createSelectSchema(userAccounts)
 export const userAccountsUSchema = createUpdateSchema(userAccounts)
+
+export type UserAccount = z.infer<typeof userAccountsSSchema>
+export type NewUserAccount = z.infer<typeof userAccountsISchema>
+export type UserAccountUpdate = z.infer<typeof userAccountsUSchema>
 
 // User Verifications
 export const userVerifications = pgTable(
@@ -92,6 +108,10 @@ export const userVerifications = pgTable(
 export const userVerificationsISchema = createInsertSchema(userVerifications)
 export const userVerificationsSSchema = createSelectSchema(userVerifications)
 export const userVerificationsUSchema = createUpdateSchema(userVerifications)
+
+export type UserVerification = z.infer<typeof userVerificationsSSchema>
+export type NewUserVerification = z.infer<typeof userVerificationsISchema>
+export type UserVerificationUpdate = z.infer<typeof userVerificationsUSchema>
 
 // Privacy User Consents
 export const userPrivacyConsents = pgTable(
@@ -125,6 +145,10 @@ export const userPrivacyConsentsISchema = createInsertSchema(userPrivacyConsents
 export const userPrivacyConsentsSSchema = createSelectSchema(userPrivacyConsents)
 export const userPrivacyConsentsUSchema = createUpdateSchema(userPrivacyConsents)
 
+export type UserPrivacyConsent = z.infer<typeof userPrivacyConsentsSSchema>
+export type NewUserPrivacyConsent = z.infer<typeof userPrivacyConsentsISchema>
+export type UserPrivacyConsentUpdate = z.infer<typeof userPrivacyConsentsUSchema>
+
 // Privacy Subject Requests
 export const userPrivacySubjectRequests = pgTable(
   "user_privacy_subject_requests",
@@ -157,6 +181,10 @@ export const userPrivacySubjectRequestsISchema = createInsertSchema(userPrivacyS
 export const userPrivacySubjectRequestsSSchema = createSelectSchema(userPrivacySubjectRequests)
 export const userPrivacySubjectRequestsUSchema = createUpdateSchema(userPrivacySubjectRequests)
 
+export type UserPrivacySubjectRequest = z.infer<typeof userPrivacySubjectRequestsSSchema>
+export type NewUserPrivacySubjectRequest = z.infer<typeof userPrivacySubjectRequestsISchema>
+export type UserPrivacySubjectRequestUpdate = z.infer<typeof userPrivacySubjectRequestsUSchema>
+
 // User Data Registry
 // Note: This is declarative. Consider adding triggers for auto-deletion based on retention_days
 // Example: CREATE TRIGGER auto_delete_expired_data AFTER INSERT ON [table] ...
@@ -181,3 +209,7 @@ export const userDataRegistry = pgTable(
 export const userDataRegistryISchema = createInsertSchema(userDataRegistry)
 export const userDataRegistrySSchema = createSelectSchema(userDataRegistry)
 export const userDataRegistryUSchema = createUpdateSchema(userDataRegistry)
+
+export type UserDataRegistry = z.infer<typeof userDataRegistrySSchema>
+export type NewUserDataRegistry = z.infer<typeof userDataRegistryISchema>
+export type UserDataRegistryUpdate = z.infer<typeof userDataRegistryUSchema>
